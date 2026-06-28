@@ -314,22 +314,26 @@ st.markdown("""
 
 # ─── Funciones de API ──────────────────────────────────────────────────────────
 
-@st.cache_data(ttl=60)
 def fetch_balldontlie(endpoint: str, api_key: str, params: dict = None) -> dict | None:
     """Consulta la API de balldontlie.io para FIFA World Cup."""
     base = "https://api.balldontlie.io/fifa/worldcup/v1"
-    headers = {"Authorization": api_key}
+    # La key va sin "Bearer", directo en el header Authorization
+    headers = {"Authorization": api_key.strip()}
     try:
-        r = requests.get(f"{base}/{endpoint}", headers=headers, params=params or {}, timeout=10)
+        r = requests.get(f"{base}/{endpoint}", headers=headers, params=params or {}, timeout=15)
+        if r.status_code == 401:
+            st.error("❌ API Key inválida. Verificá tu clave en balldontlie.io → Account.")
+            return None
+        if r.status_code == 403:
+            st.error("❌ Sin acceso. Tu plan puede no incluir datos del Mundial.")
+            return None
+        if r.status_code == 429:
+            st.warning("⚠️ Límite de requests alcanzado. Esperá un momento.")
+            return None
         r.raise_for_status()
         return r.json()
-    except requests.HTTPError as e:
-        if e.response.status_code == 401:
-            st.error("❌ API Key inválida. Verificá tu clave de balldontlie.io")
-        elif e.response.status_code == 429:
-            st.warning("⚠️ Límite de requests alcanzado. Esperá un momento.")
-        else:
-            st.error(f"Error API: {e.response.status_code}")
+    except requests.exceptions.ConnectionError:
+        st.error("❌ Sin conexión. Verificá tu internet.")
     except Exception as e:
         st.error(f"Error de conexión: {e}")
     return None
@@ -396,11 +400,20 @@ def parse_balldontlie_matches(data: dict) -> list[dict]:
     if not data or "data" not in data:
         return matches
     for m in data["data"]:
-        stage_raw = m.get("round", {}).get("name", "") if isinstance(m.get("round"), dict) else m.get("round", "")
-        # Filtrar sólo fases eliminatorias
-        knockout_keywords = ["Round of 32", "Round of 16", "Quarter", "Semi", "Final", "Third"]
-        if not any(k.lower() in stage_raw.lower() for k in knockout_keywords):
-            continue
+        # Soportar distintas estructuras de round/stage
+        round_obj = m.get("round") or m.get("stage") or {}
+        if isinstance(round_obj, dict):
+            stage_raw = round_obj.get("name") or round_obj.get("slug") or round_obj.get("type") or ""
+        else:
+            stage_raw = str(round_obj)
+
+        # Si no hay info de etapa, usar el partido igual (no filtrar)
+        knockout_keywords = ["Round of 32", "Round of 16", "Quarter", "Semi", "Final", "Third",
+                             "Knockout", "Octavo", "Cuarto", "Playoff", "playoff"]
+        # Incluir si es fase eliminatoria O si no tiene etapa definida
+        is_group = any(k.lower() in stage_raw.lower() for k in ["Group", "Grupo", "group stage"])
+        if is_group:
+            continue  # saltear fase de grupos
 
         home = m.get("home_team", {})
         away = m.get("away_team", {})
@@ -647,9 +660,13 @@ if api_key:
 
     with st.spinner("Cargando partidos del Mundial..."):
         if api_source == "balldontlie.io":
-            # Traemos todos los partidos de la edición 2026
-            data = fetch_balldontlie("matches", api_key, {"seasons[]": "2026", "per_page": 200})
+            # Traemos todos los partidos sin filtro de temporada primero
+            data = fetch_balldontlie("matches", api_key, {"per_page": 100})
             if data:
+                # Debug: mostrar estructura en expander
+                with st.expander("🔍 Debug — respuesta cruda de la API", expanded=False):
+                    st.json(data)
+
                 matches_raw = parse_balldontlie_matches(data)
 
                 # Si hay paginación, traer resto
@@ -658,7 +675,7 @@ if api_key:
                 if total_pages and int(total_pages) > 1:
                     for page in range(2, int(total_pages) + 1):
                         extra = fetch_balldontlie("matches", api_key,
-                            {"seasons[]": "2026", "per_page": 200, "page": page})
+                            {"per_page": 100, "page": page})
                         if extra:
                             matches_raw += parse_balldontlie_matches(extra)
 
