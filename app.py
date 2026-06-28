@@ -240,6 +240,93 @@ st.markdown("""
   h1, h2, h3 { color: #e8f0fe !important; }
   p, li { color: #8ab4d4 !important; }
 
+  /* ─── Bracket / Llaves ─── */
+  .bracket-scroll {
+    overflow-x: auto;
+    padding: 10px 4px 24px;
+  }
+  .bracket {
+    display: flex;
+    min-width: max-content;
+    gap: 36px;
+  }
+  .bracket-col {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-around;
+    min-width: 190px;
+  }
+  .bracket-col-title {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 1rem;
+    letter-spacing: 2px;
+    color: #c8a84b;
+    text-align: center;
+    margin-bottom: 10px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid #c8a84b33;
+  }
+  .bk-match {
+    background: linear-gradient(135deg, #1e2d42, #243450);
+    border: 1px solid #2e4166;
+    border-radius: 8px;
+    margin: 6px 0;
+    overflow: hidden;
+    position: relative;
+  }
+  .bk-match.live { border-color: #27ae60; box-shadow: 0 0 10px rgba(39,174,96,0.3); }
+  .bk-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 10px;
+    font-family: 'Inter', sans-serif;
+    font-size: 0.82rem;
+    color: #b8c9de;
+    border-bottom: 1px solid #2e416644;
+  }
+  .bk-row:last-child { border-bottom: none; }
+  .bk-row.winner {
+    background: linear-gradient(90deg, #2a2000, #1e2d42);
+    color: #f0d98a;
+    font-weight: 700;
+  }
+  .bk-row.winner::before {
+    content: '▸';
+    color: #c8a84b;
+    margin-right: 4px;
+    font-size: 0.7rem;
+  }
+  .bk-team { display: flex; align-items: center; gap: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bk-team img { width: 18px; height: 18px; object-fit: contain; }
+  .bk-score {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 1rem;
+    color: #c8a84b;
+    min-width: 18px;
+    text-align: center;
+  }
+  .bk-final {
+    border-color: #c8a84b;
+    box-shadow: 0 0 18px rgba(200,168,75,0.25);
+  }
+  .bk-champion {
+    background: linear-gradient(135deg, #2a2000, #1a3a6e);
+    border: 1px solid #c8a84b;
+    border-radius: 10px;
+    padding: 14px;
+    text-align: center;
+    margin-top: 14px;
+  }
+  .bk-champion .lbl {
+    font-family: 'Inter', sans-serif; font-size: 0.7rem;
+    letter-spacing: 2px; color: #8ab4d4; text-transform: uppercase;
+  }
+  .bk-champion .name {
+    font-family: 'Bebas Neue', sans-serif; font-size: 1.6rem;
+    color: #f0d98a; letter-spacing: 2px;
+  }
+
   .stButton > button {
     background: linear-gradient(135deg, #1a3a6e, #2e5090) !important;
     border: 1px solid #c8a84b !important;
@@ -467,6 +554,84 @@ def render_table(matches: list[dict]):
         st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
 
+def _winner_side(m: dict) -> str | None:
+    """Devuelve 'home', 'away' o None según el ganador (solo si finalizó)."""
+    if m["state"] != "post" or m["home_score"] is None or m["away_score"] is None:
+        return None
+    if m["home_score"] > m["away_score"]:
+        return "home"
+    if m["away_score"] > m["home_score"]:
+        return "away"
+    return None  # empate (se definió por penales, sin dato de marcador)
+
+
+def _bk_match_html(m: dict) -> str:
+    win = _winner_side(m)
+    live_cls = "live" if m["is_live"] else ""
+
+    def side(team, logo, score, is_win):
+        logo_img = f'<img src="{logo}" onerror="this.style.display=\'none\'">' if logo else ""
+        sc = score if score is not None else ""
+        cls = "winner" if is_win else ""
+        name = team if team and "Winner" not in team and "Por definir" not in team else "—"
+        return (f'<div class="bk-row {cls}"><span class="bk-team">{logo_img}{name}</span>'
+                f'<span class="bk-score">{sc}</span></div>')
+
+    return (
+        f'<div class="bk-match {live_cls}">'
+        + side(m["home_team"], m["home_logo"], m["home_score"], win == "home")
+        + side(m["away_team"], m["away_logo"], m["away_score"], win == "away")
+        + '</div>'
+    )
+
+
+def render_bracket(matches: list[dict]):
+    """Dibuja el cuadro de llaves con la evolución de los ganadores."""
+    # Columnas principales (sin 3er puesto, que va aparte)
+    cols_order = ["Round of 32", "Round of 16", "Quarter-finals", "Semi-finals", "Final"]
+    present = [s for s in cols_order if any(m["stage"] == s for m in matches)]
+    if not present:
+        st.info("El cuadro de llaves se completará cuando arranque la fase eliminatoria.")
+        return
+
+    html = '<div class="bracket-scroll"><div class="bracket">'
+    for stage in present:
+        stage_matches = sorted(
+            [m for m in matches if m["stage"] == stage],
+            key=lambda x: x["datetime_art"] or datetime.max.replace(tzinfo=ART),
+        )
+        emoji = EMOJI_STAGES.get(stage, "⚽")
+        html += '<div class="bracket-col">'
+        html += f'<div class="bracket-col-title">{emoji} {STAGE_LABELS.get(stage, stage)}</div>'
+        for m in stage_matches:
+            html += _bk_match_html(m)
+        html += '</div>'
+    html += '</div></div>'
+    st.markdown(html, unsafe_allow_html=True)
+
+    # Campeón (si la final terminó)
+    final = next((m for m in matches if m["stage"] == "Final"), None)
+    if final:
+        win = _winner_side(final)
+        if win:
+            champ = final["home_team"] if win == "home" else final["away_team"]
+            logo = final["home_logo"] if win == "home" else final["away_logo"]
+            logo_img = f'<img src="{logo}" style="width:32px;vertical-align:middle;margin-right:8px" onerror="this.style.display=\'none\'">' if logo else "🏆"
+            st.markdown(
+                f'<div class="bk-champion"><div class="lbl">🏆 Campeón del Mundo</div>'
+                f'<div class="name">{logo_img}{champ}</div></div>',
+                unsafe_allow_html=True,
+            )
+
+    # 3er puesto aparte
+    third = next((m for m in matches if m["stage"] == "Third-place playoff"), None)
+    if third:
+        st.markdown('<div class="stage-header" style="font-size:1.2rem">🥉 TERCER PUESTO</div>',
+                    unsafe_allow_html=True)
+        st.markdown(f'<div style="max-width:220px">{_bk_match_html(third)}</div>',
+                    unsafe_allow_html=True)
+
+
 # ─── Sidebar ───────────────────────────────────────────────────────────────────
 
 with st.sidebar:
@@ -496,7 +661,7 @@ with st.sidebar:
         default=list(STAGE_LABELS.values()),
     )
 
-    view_mode = st.radio("Vista", ["🃏 Tarjetas", "📊 Tabla", "🏆 Ambas"], index=2)
+    view_mode = st.radio("Vista", ["🗺️ Llaves", "🃏 Tarjetas", "📊 Tabla", "🏆 Todo"], index=0)
 
     st.divider()
     st.markdown("""
@@ -568,9 +733,17 @@ if live_matches:
         render_match_card(m)
     st.divider()
 
-# Vista tabla / tarjetas
-show_cards = view_mode in ("🃏 Tarjetas", "🏆 Ambas")
-show_table = view_mode in ("📊 Tabla", "🏆 Ambas")
+# Vista llaves / tabla / tarjetas
+show_bracket = view_mode in ("🗺️ Llaves", "🏆 Todo")
+show_cards = view_mode in ("🃏 Tarjetas", "🏆 Todo")
+show_table = view_mode in ("📊 Tabla", "🏆 Todo")
+
+if show_bracket:
+    st.markdown('<div class="stage-header">🗺️ CUADRO DE LLAVES · EVOLUCIÓN DE GANADORES</div>',
+                unsafe_allow_html=True)
+    # El bracket siempre usa todos los partidos (ignora el filtro de etapas)
+    render_bracket(matches_raw)
+    st.markdown("<br>", unsafe_allow_html=True)
 
 if show_table and filtered:
     st.markdown('<div class="stage-header">📊 TABLA COMPLETA DE PLAYOFFS</div>', unsafe_allow_html=True)
